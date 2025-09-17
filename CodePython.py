@@ -1,108 +1,77 @@
-
-import argparse
 import pandas as pd
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
-from bs4 import BeautifulSoup
-import re
 
-FIGHT_CSV = "fight_club_critiques.csv"
-INTER_CSV = "interstellar_critique.csv"
-KNOWN_TEXT_COLS = ["text","critique","review","content","comment","body","commentaire"]
 
-def clean_html(s):
-    if s is None:
-        return ""
-    s = str(s)
-    try:
-        s = BeautifulSoup(s, "html.parser").get_text(separator=" ")
-    except Exception:
-        s = re.sub(r'<[^>]+>', ' ', s)
-    s = re.sub(r'\s+', ' ', s).strip()
-    return s
+# ==============================
+# 1. Chargement des datasets
+# ==============================
+# Les deux fichiers CSV contiennent les critiques
+fight = pd.read_csv("fight_club_critiques.csv")
+inter = pd.read_csv("interstellar_critique.csv")
 
-def detect_text_column(df):
-    for c in df.columns:
-        if c.lower() in KNOWN_TEXT_COLS:
-            return c
-    candidates = []
-    for c in df.columns:
-        if pd.api.types.is_string_dtype(df[c]) or pd.api.types.is_object_dtype(df[c]):
-            avg_len = df[c].dropna().astype(str).map(len).mean() if df[c].dropna().shape[0]>0 else 0
-            candidates.append((c, avg_len))
-    if not candidates:
-        return df.columns[0]
-    candidates.sort(key=lambda x: x[1], reverse=True)
-    return candidates[0][0]
+# On ajoute une colonne "film" pour savoir à quel film appartient la critique
+fight["film"] = "Fight Club"
+inter["film"] = "Interstellar"
 
-def build_dataframe():
-    df1 = pd.read_csv(FIGHT_CSV, dtype=object)
-    df2 = pd.read_csv(INTER_CSV, dtype=object)
-    df1["film"] = "Fight Club"
-    df2["film"] = "Interstellar"
-    df = pd.concat([df1, df2], ignore_index=True)
-    if "critique_id" not in df.columns:
-        df = df.reset_index().rename(columns={"index":"critique_id"})
-    return df
+# Fusionner les deux datasets en un seul
+df = pd.concat([fight, inter], ignore_index=True)
 
-def prepare_text_column(df):
-    text_col = detect_text_column(df)
-    df["cleaned_text"] = df[text_col].fillna("").astype(str).apply(clean_html)
-    return df, text_col
+# Nettoyage : remplacer les valeurs manquantes dans la colonne des critiques
+df["review_content"] = df["review_content"].fillna("")
 
-def build_tfidf(df):
-    vec = TfidfVectorizer(stop_words="french", ngram_range=(1,2), max_df=0.85)
-    tfidf = vec.fit_transform(df["cleaned_text"])
-    return vec, tfidf
 
-def recommend(df, cosine_sim, index, topk=3):
-    if index < 0 or index >= len(df):
-        raise IndexError("index hors limites")
+# ==============================
+# 2. Transformation TF-IDF
+# ==============================
+# On convertit les critiques en vecteurs numériques
+vectorizer = TfidfVectorizer(stop_words="french")
+tfidf_matrix = vectorizer.fit_transform(df["review_content"])
+
+# Calculer la similarité cosinus entre toutes les critiques
+cosine_sim = cosine_similarity(tfidf_matrix, tfidf_matrix)
+
+
+# ==============================
+# 3. Fonction de recommandation
+# ==============================
+def recommander(index, topk=3):
+    """
+    Trouver les critiques similaires à une critique donnée (par son index).
+    On ne recommande que des critiques du même film.
+    """
     film = df.loc[index, "film"]
-    same_mask = df["film"] == film
-    candidates = [i for i,flag in enumerate(same_mask) if flag and i != index]
-    if not candidates:
-        return []
-    sims = [(i, float(cosine_sim[index, i])) for i in candidates]
-    sims.sort(key=lambda x: x[1], reverse=True)
-    top = sims[:topk]
-    results = []
-    for i,score in top:
-        results.append({
-            "index": int(i),
-            "critique_id": df.loc[i,"critique_id"] if "critique_id" in df.columns else None,
-            "film": film,
-            "score": score,
-            "preview": df.loc[i, "cleaned_text"][:400]
+    similarities = list(enumerate(cosine_sim[index]))
+
+    # Garder seulement les critiques du même film et ignorer la critique elle-même
+    similarities = [(i, score) for i, score in similarities if df.loc[i, "film"] == film and i != index]
+
+    # Trier par score décroissant
+    similarities = sorted(similarities, key=lambda x: x[1], reverse=True)[:topk]
+
+    # Construire les résultats
+    resultats = []
+    for i, score in similarities:
+        resultats.append({
+            "film": df.loc[i, "film"],
+            "score": round(score, 3),
+            "review": df.loc[i, "review_content"][:250]  # aperçu des 250 premiers caractères
         })
-    return results
+    return resultats
 
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--index", type=int, default=0, help="Index (0-based) de la critique à utiliser comme requête")
-    parser.add_argument("--topk", type=int, default=3, help="Nombre de recommandations")
-    args = parser.parse_args()
 
-    print("Chargement des CSVs")
-    df = build_dataframe()
-    df, text_col = prepare_text_column(df)
-    print(f"Colonne texte détectée: '{text_col}'")
-    print("Construction TF-IDF")
-    _, tfidf = build_tfidf(df)
-    print("Calcul matrice similarité")
-    cosine_sim = cosine_similarity(tfidf, tfidf)
-
-    qidx = args.index
-    print("\nCritique source (preview):")
-    print(df.loc[qidx, "cleaned_text"][:500])
-    print("\nTop recommandations (même film):")
-    recs = recommend(df, cosine_sim, qidx, topk=args.topk)
-    if not recs:
-        print("Aucune suggestion (pas assez de critiques pour le film ou texte vide).")
-        return
-    for i,r in enumerate(recs, start=1):
-        print(f"\n#{i} | index={r['index']} | score={r['score']:.4f}")
-        print(r["preview"][:400])
-
+# ==============================
+# 4. Exemple d’utilisation
+# ==============================
 if __name__ == "__main__":
-    main()
+    # Choisir un index de critique pour tester (ici la première critique)
+    index_test = 0
+
+    print("=== Critique de base ===")
+    print(df.loc[index_test, "review_content"], "\n")
+
+    print("=== Critiques similaires ===")
+    recommandations = recommander(index_test, topk=3)
+    for r in recommandations:
+        print(f"[{r['film']}] (score={r['score']})")
+        print(r["review"], "\n")
