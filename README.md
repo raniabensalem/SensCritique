@@ -11,3 +11,10 @@ System Design :
     C --> D[Calcul Similarité Cosinus<br>(entre toutes les critiques)]
     D --> E[Filtrer uniquement les critiques<br>du même film]
     E --> F[Recommandations<br>de critiques similaires]
+
+Explications des choix techniques :
+
+Python + Pandas : lecture et manipulation simple des fichiers CSV.
+TF-IDF (sklearn) : représentation des critiques en fonction des mots importants.
+Cosine Similarity : mesure la proximité entre deux critiques.
+Filtrage par film : une critique de Fight Club ne recommande jamais une critique d’Interstellar
