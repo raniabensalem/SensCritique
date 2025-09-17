@@ -27,10 +27,8 @@ cosine_sim = cosine_similarity(tfidf_matrix, tfidf_matrix)
 
 # 3. Fonction de recommandation
 def recommander(index, topk=3):
-    """
-    Trouver les critiques similaires à une critique donnée (par son index).
-    On ne recommande que des critiques du même film.
-    """
+    #Trouver les critiques similaires à une critique donnée (par son index).
+    #On ne recommande que des critiques du même film.
     film = df.loc[index, "film"]
     similarities = list(enumerate(cosine_sim[index]))
 
